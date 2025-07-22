@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>My Documents</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Roboto', sans-serif;
+      background-color: #f4f6f8;
+      margin: 0;
+      padding: 0;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    .dark-mode {
+      background-color: #181818;
+      color: #fff;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 30px;
+      background-color: #ffffff;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    .dark-mode .container {
+      background-color: #2a2a2a;
+      color: #eee;
+    }
+
+    h2, h3 {
+      margin-bottom: 20px;
+    }
+
+    #dropArea {
+      border: 2px dashed #007BFF;
+      padding: 40px;
+      text-align: center;
+      color: #888;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      transition: background-color 0.3s;
+    }
+
+    #dropArea.dragover {
+      background-color: #e6f0ff;
+      color: #007BFF;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    button, .download-btn {
+      background-color: #007BFF;
+      color: #fff;
+      padding: 10px 16px;
+      font-size: 14px;
+      border: none;
+      border-radius: 5px;
+      margin-left: 10px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    button:hover, .download-btn:hover {
+      background-color: #0056b3;
+    }
+
+    ul#fileList {
+      list-style: none;
+      padding: 0;
+    }
+
+    ul#fileList li {
+      background-color: #f0f0f0;
+      margin-bottom: 10px;
+      padding: 10px;
+      border-radius: 5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .dark-mode ul#fileList li {
+      background-color: #3a3a3a;
+    }
+
+    .file-info {
+      flex-grow: 1;
+      word-break: break-word;
+    }
+
+    .success-message {
+      color: green;
+      margin-bottom: 15px;
+    }
+
+    a.logout {
+      display: inline-block;
+      margin-top: 20px;
+      text-decoration: none;
+      color: #fff;
+      background-color: #dc3545;
+      padding: 10px 20px;
+      border-radius: 5px;
+    }
+
+    a.logout:hover {
+      background-color: #a71d2a;
+    }
+
+    .toggle-mode {
+      float: right;
+      background: #6c757d;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 5px;
+      border: none;
+      cursor: pointer;
+    }
+
+    .toggle-mode:hover {
+      background: #5a6268;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <button class="toggle-mode" onclick="toggleMode()">Toggle Dark Mode</button>
+    <h2>Upload File</h2>
+
+    <div id="successMsg" class="success-message" style="display:none;"></div>
+
+    <div id="dropArea">
+      Drag & drop files here or click to select
+      <input type="file" id="fileInput" name="file" />
+    </div>
+
+    <h3>Your Files</h3>
+    <ul id="fileList"></ul>
+
+    <a class="logout" href="/logout">Logout</a>
+  </div>
+
+  <script>
+    const dropArea = document.getElementById("dropArea");
+    const fileInput = document.getElementById("fileInput");
+
+    dropArea.addEventListener("click", () => fileInput.click());
+
+    ["dragenter", "dragover"].forEach(eventName => {
+      dropArea.addEventListener(eventName, e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropArea.classList.add("dragover");
+      });
+    });
+
+    ["dragleave", "drop"].forEach(eventName => {
+      dropArea.addEventListener(eventName, e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropArea.classList.remove("dragover");
+      });
+    });
+
+    dropArea.addEventListener("drop", e => {
+      const files = e.dataTransfer.files;
+      if (files.length) uploadFile(files[0]);
+    });
+
+    fileInput.addEventListener("change", e => {
+      const file = e.target.files[0];
+      if (file) uploadFile(file);
+    });
+
+    async function uploadFile(file) {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/upload", {
+        method: "POST",
+        body: formData
+      });
+      const result = await res.json();
+      if (result.success) {
+        showSuccess("File uploaded successfully!");
+        fetchFiles();
+      } else {
+        showSuccess("Upload failed.");
+      }
+    }
+
+    function fetchFiles() {
+      fetch('/files')
+        .then(res => res.json())
+        .then(files => {
+          const list = document.getElementById("fileList");
+          list.innerHTML = "";
+          files.forEach(file => {
+            const li = document.createElement("li");
+            const size = formatSize(file.size);
+            li.innerHTML = `
+              <div class="file-info">
+                <strong>${file.name}</strong><br>
+                Type: ${file.type || 'Unknown'} | Size: ${size} | Uploaded: ${new Date(file.uploaded_at).toLocaleString()} | By: ${file.uploaded_by}
+
+              </div>
+              <a class="download-btn" href="/files/${file.id}" download>Download</a>
+            `;
+            list.appendChild(li);
+          });
+        });
+    }
+
+    function showSuccess(msg) {
+      const box = document.getElementById("successMsg");
+      box.textContent = msg;
+      box.style.display = "block";
+      setTimeout(() => box.style.display = "none", 3000);
+    }
+
+    function formatSize(bytes) {
+      if (!bytes) return "0 B";
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
+    }
+
+    function toggleMode() {
+      document.body.classList.toggle("dark-mode");
+    }
+
+    // Initial load
+    fetchFiles();
+  </script>
+</body>
+</html>
