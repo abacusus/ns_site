@@ -1,14 +1,18 @@
 const express = require('express');
 const session = require('express-session');
-const sqlite3 = require('sqlite3').verbose();
 const multer = require('multer');
 const path = require('path');
 const bodyParser = require('body-parser');
+const { Pool } = require('pg');
 
 const app = express();
-const db = new sqlite3.Database('./database.db');
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
+
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: true }));
@@ -20,28 +24,27 @@ app.use(session({
   saveUninitialized: false
 }));
 
-// Create DB tables if not exist
-db.serialize(() => {
-  db.run(`
+// Initialize DB tables
+(async () => {
+  await db.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       username TEXT UNIQUE,
       password TEXT
-    )
+    );
   `);
 
-  db.run(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS files (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
       name TEXT,
       type TEXT,
-      data BLOB,
-      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id)
-    )
+      data BYTEA,
+      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
   `);
-});
+})();
 
 // Auth middleware
 function isLoggedIn(req, res, next) {
@@ -49,7 +52,7 @@ function isLoggedIn(req, res, next) {
   res.redirect('/login');
 }
 
-// Route: Home redirects to login or dashboard
+// Routes
 app.get('/', (req, res) => {
   if (req.session.userId) {
     res.redirect('/dashboard');
@@ -58,94 +61,110 @@ app.get('/', (req, res) => {
   }
 });
 
-// Login page
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// Register page
 app.get('/naman14113114', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'register.html'));
 });
 
-// Dashboard (protected)
 app.get('/dashboard', isLoggedIn, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
-// Register handler (no hashing)
-app.post('/register', (req, res) => {
+// Register (plain password for now)
+app.post('/register', async (req, res) => {
   const { username, password } = req.body;
-  db.run(`INSERT INTO users (username, password) VALUES (?, ?)`, [username, password], function (err) {
-    if (err) return res.send("Username already taken.");
-    req.session.userId = this.lastID;
+  try {
+    const result = await db.query(
+      `INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id`,
+      [username, password]
+    );
+    req.session.userId = result.rows[0].id;
     res.redirect('/login');
-  });
+  } catch (err) {
+    res.send("Username already taken.");
+  }
 });
 
-// Login handler (plain password check)
-app.post('/login', (req, res) => {
+// Login
+app.post('/login', async (req, res) => {
   const { username, password } = req.body;
-  db.get(`SELECT * FROM users WHERE username = ?`, [username], (err, user) => {
-    if (err || !user || user.password !== password) {
+  try {
+    const result = await db.query(
+      `SELECT * FROM users WHERE username = $1`,
+      [username]
+    );
+    const user = result.rows[0];
+    if (!user || user.password !== password) {
       return res.send("Invalid credentials");
     }
     req.session.userId = user.id;
     res.redirect('/dashboard');
-  });
+  } catch (err) {
+    res.send("Login failed.");
+  }
 });
 
-// Logout
 app.get('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/login'));
 });
 
 // Upload file
-app.post('/upload', isLoggedIn, upload.single('file'), (req, res) => {
+app.post('/upload', isLoggedIn, upload.single('file'), async (req, res) => {
   const { originalname, mimetype, buffer } = req.file;
-  db.run(`INSERT INTO files (user_id, name, type, data) VALUES (?, ?, ?, ?)`,
-    [req.session.userId, originalname, mimetype, buffer],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true });
-    });
+  try {
+    await db.query(
+      `INSERT INTO files (user_id, name, type, data) VALUES ($1, $2, $3, $4)`,
+      [req.session.userId, originalname, mimetype, buffer]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Get file list
-app.get('/files', isLoggedIn, (req, res) => {
-  db.all(`
-    SELECT 
-      files.id, 
-      files.name, 
-      files.type, 
-      LENGTH(files.data) AS size, 
-      files.uploaded_at, 
-      users.username AS uploaded_by
-    FROM files
-    JOIN users ON files.user_id = users.id
-    WHERE files.user_id = ?
-  `, [req.session.userId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
+// List files
+app.get('/files', isLoggedIn, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        files.id, 
+        files.name, 
+        files.type, 
+        OCTET_LENGTH(files.data) AS size,
+        files.uploaded_at,
+        users.username AS uploaded_by
+      FROM files
+      JOIN users ON files.user_id = users.id
+      WHERE files.user_id = $1
+    `, [req.session.userId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
-
-
-
 
 // Download file
-app.get('/files/:id', isLoggedIn, (req, res) => {
-  db.get(`SELECT * FROM files WHERE id = ? AND user_id = ?`, [req.params.id, req.session.userId], (err, row) => {
-    if (!row) return res.status(404).send('File not found');
-    res.setHeader('Content-Type', row.type);
-    res.setHeader('Content-Disposition', `attachment; filename="${row.name}"`);
-    res.send(row.data);
-  });
+app.get('/files/:id', isLoggedIn, async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT * FROM files WHERE id = $1 AND user_id = $2`,
+      [req.params.id, req.session.userId]
+    );
+    const file = result.rows[0];
+    if (!file) return res.status(404).send('File not found');
+    res.setHeader('Content-Type', file.type);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.name}"`);
+    res.send(file.data);
+  } catch (err) {
+    res.status(500).send("Error downloading file");
+  }
 });
 
-// Start the server
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
-
