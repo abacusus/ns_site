@@ -65,7 +65,7 @@ app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-app.get('/naman14113114', (req, res) => {
+app.get('/ns', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'register.html'));
 });
 
@@ -168,3 +168,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
